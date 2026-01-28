@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Polaroid Board v10 (Delete)</title>
+    <style>
+        /* --- СТИЛИ --- */
+        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: sans-serif; user-select: none; -webkit-user-select: none; touch-action: none; background-color: #aa7e56; background-image: radial-gradient(transparent 90%, rgba(0,0,0,0.1) 90%), radial-gradient(transparent 90%, rgba(0,0,0,0.1) 90%); background-size: 20px 20px; background-position: 0 0, 10px 10px; transition: background-size 0.3s ease-out; }
+        .viewport { width: 100%; height: 100%; overflow: hidden; position: relative; box-shadow: inset 0 0 150px rgba(0,0,0,0.4); cursor: grab; }
+        .viewport:active { cursor: grabbing; }
+        .board { width: 100%; height: 100%; position: absolute; top: 0; left: 0; transform-origin: 0 0; pointer-events: none; }
+        
+        .polaroid { 
+            position: absolute; background-color: white; padding: 10px 10px 35px 10px; 
+            box-shadow: 5px 10px 20px rgba(0,0,0,0.3); width: 200px; 
+            transition: box-shadow 0.3s; cursor: grab; 
+            transform-origin: top center; 
+            animation: sway 4s ease-in-out infinite alternate; 
+            pointer-events: auto; 
+        }
+        
+        @media (max-width: 600px) { .polaroid { width: 140px; padding: 6px 6px 25px 6px; font-size: 0.8rem; } }
+
+        .polaroid.dragging { 
+            cursor: grabbing; animation: none; 
+            transform: scale(1.1) rotate(0deg) !important; 
+            box-shadow: 20px 40px 50px rgba(0,0,0,0.5); z-index: 9999 !important; 
+        }
+        
+        /* Класс для анимации падения */
+        .polaroid.falling {
+            animation: drop 1s ease-in forwards !important;
+            pointer-events: none; /* Чтобы нельзя было поймать падающее фото */
+            z-index: 100;
+        }
+
+        .polaroid:hover { z-index: 10; }
+        .polaroid img { width: 100%; height: auto; display: block; pointer-events: none; filter: sepia(20%); }
+
+        /* --- НОВАЯ БУЛАВКА (КНОПКА) --- */
+        .pin {
+            position: absolute; top: -10px; left: 50%; transform: translateX(-50%);
+            width: 15px; height: 15px; border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, #ff4d4d, #990000);
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.5); z-index: 20;
+            cursor: pointer; /* Курсор пальца при наведении на кнопку */
+        }
+        /* Увеличение булавки при наведении, чтобы показать что она активна */
+        .pin:hover { transform: translateX(-50%) scale(1.2); }
+        
+        /* Металлическая иголка */
+        .polaroid::before { 
+            content: ''; position: absolute; top: -5px; left: 50%; transform: translateX(-50%); 
+            width: 4px; height: 8px; background: #aaa; z-index: 1; 
+        }
+
+        @keyframes sway { 0% { transform: rotate(-2deg); } 100% { transform: rotate(2deg); } }
+        
+        /* Анимация падения */
+        @keyframes drop {
+            0% { transform: rotate(0deg); opacity: 1; }
+            20% { transform: rotate(10deg); top: +=20px; } /* Сначала чуть наклоняется */
+            100% { top: 1000px; transform: rotate(45deg); opacity: 0; } /* Улетает вниз */
+        }
+
+        .controls { position: fixed; bottom: 20px; right: 20px; display: flex; flex-wrap: wrap-reverse; justify-content: flex-end; gap: 10px; z-index: 10000; }
+        .btn { background: white; border: none; padding: 12px 15px; font-size: 18px; font-weight: bold; color: #333; box-shadow: 3px 3px 10px rgba(0,0,0,0.3); cursor: pointer; border-radius: 2px; transform: rotate(-1deg); transition: transform 0.2s; min-width: 50px; }
+        .btn:hover { transform: rotate(1deg) scale(1.05); background: #fff8e1; }
+        .btn:disabled { opacity: 0.5; cursor: wait; background: #ccc; }
+        .modal { display: none; position: fixed; z-index: 10001; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.8); justify-content: center; align-items: center; backdrop-filter: blur(5px); }
+        .modal-content { background: white; padding: 10px 10px 40px 10px; max-width: 90%; max-height: 80%; box-shadow: 0 0 50px rgba(0,0,0,0.5); border-radius: 2px; transform: rotate(-1deg); }
+        .modal-content img { max-width: 100%; max-height: 70vh; display: block; }
+        .close { position: absolute; top: 5px; right: 15px; color: #333; font-size: 30px; font-weight: bold; cursor: pointer; line-height: 1; }
+        
+        #loader { display: none; margin-left: 10px; color: white; font-weight: bold; text-shadow: 1px 1px 2px black; align-self: center;}
+    </style>
+</head>
+<body>
+
+    <div class="viewport" id="viewport">
+        <div class="board" id="board"></div>
+    </div>
+
+    <div class="controls">
+        <div id="loader">Сжимаю и отправляю...</div>
+        <button class="btn" id="uploadBtn" onclick="document.getElementById('fileInput').click()">📷 Фото</button>
+        <button class="btn" onclick="changeZoom(0.1)">➕</button>
+        <button class="btn" onclick="changeZoom(-0.1)">➖</button>
+        <button class="btn" onclick="resetView()">🎯</button>
+    </div>
+
+    <input type="file" id="fileInput" accept="image/*" style="display: none;">
+
+    <div id="photoModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <img id="modalImg" src="">
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        // Добавили remove и removeRef
+        import { getDatabase, ref, push, set, remove, onChildAdded, onChildRemoved } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+        // ТВОИ КЛЮЧИ
+        const firebaseConfig = {
+            apiKey: "AIzaSyBmwGj7Rbfh6svO0RzNXObBFVG6yHFc8VI",
+            authDomain: "polaroid-board-6aa2a.firebaseapp.com",
+            databaseURL: "https://polaroid-board-6aa2a-default-rtdb.firebaseio.com",
+            projectId: "polaroid-board-6aa2a",
+            storageBucket: "polaroid-board-6aa2a.firebasestorage.app",
+            messagingSenderId: "701668102528",
+            appId: "1:701668102528:web:132de7069a957bec5c3165",
+            measurementId: "G-J948W4RJJ2"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+        const dbRef = ref(db, 'photos_base64');
+
+        // СЖАТИЕ ФОТО
+        function compressImage(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const MAX_WIDTH = 800; 
+                        const scaleSize = MAX_WIDTH / img.width;
+                        const width = (img.width > MAX_WIDTH) ? MAX_WIDTH : img.width;
+                        const height = (img.width > MAX_WIDTH) ? (img.height * scaleSize) : img.height;
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+                        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+                        resolve(dataUrl);
+                    };
+                    img.onerror = (err) => reject(err);
+                };
+                reader.onerror = (err) => reject(err);
+            });
+        }
+
+        // ЗАГРУЗКА
+        const fileInput = document.getElementById('fileInput');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const loader = document.getElementById('loader');
+
+        fileInput.addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            uploadBtn.disabled = true;
+            loader.style.display = 'block';
+            try {
+                const base64String = await compressImage(file);
+                const newPhotoRef = push(dbRef);
+                await set(newPhotoRef, {
+                    image_data: base64String,
+                    x: (Math.random() * 400 - 200),
+                    y: (Math.random() * 400 - 200),
+                    timestamp: Date.now()
+                });
+            } catch (error) {
+                console.error(error);
+                alert("Ошибка: " + error.message);
+            } finally {
+                uploadBtn.disabled = false;
+                loader.style.display = 'none';
+                fileInput.value = '';
+            }
+        });
+
+        // --- ЛОГИКА ДОБАВЛЕНИЯ И УДАЛЕНИЯ ---
+
+        // 1. Пришло новое фото
+        onChildAdded(dbRef, (snapshot) => {
+            const data = snapshot.val();
+            const key = snapshot.key; // Уникальный ID фото в базе
+            if(data && data.image_data) {
+                renderPhoto(data.image_data, data.x, data.y, key);
+            }
+        });
+
+        // 2. Кто-то удалил фото (слушаем удаление)
+        onChildRemoved(dbRef, (snapshot) => {
+            const key = snapshot.key;
+            const elementToRemove = document.getElementById(key);
+            
+            if (elementToRemove) {
+                // Запускаем анимацию падения
+                elementToRemove.classList.add('falling');
+                
+                // Ждем 1 секунду (пока упадет) и удаляем из HTML навсегда
+                setTimeout(() => {
+                    elementToRemove.remove();
+                }, 1000);
+            }
+        });
+
+        function renderPhoto(src, x, y, key) {
+            const div = document.createElement('div');
+            div.className = 'polaroid';
+            div.id = key; // Присваиваем ID элемента равный ключу базы, чтобы потом найти его
+            div.style.left = x + 'px';
+            div.style.top = y + 'px';
+            div.style.animationDelay = `-${Math.random() * 2}s`; 
+
+            // Красная кнопка (Булавка)
+            const pin = document.createElement('div');
+            pin.className = 'pin';
+            // Обработчик удаления
+            pin.addEventListener('mousedown', (e) => {
+                e.stopPropagation(); // Чтобы не началось перетаскивание
+                const confirmDelete = confirm("Удалить фото?");
+                if (confirmDelete) {
+                    // Удаляем из Firebase. Это вызовет onChildRemoved у всех пользователей
+                    remove(ref(db, 'photos_base64/' + key));
+                }
+            });
+            // Для сенсоров
+            pin.addEventListener('touchstart', (e) => {
+                e.stopPropagation();
+                e.preventDefault(); // Чтобы не кликнуло дважды
+                const confirmDelete = confirm("Удалить фото?");
+                if (confirmDelete) {
+                    remove(ref(db, 'photos_base64/' + key));
+                }
+            });
+
+            const img = document.createElement('img');
+            img.src = src;
+            
+            div.appendChild(pin); // Добавляем булавку
+            div.appendChild(img);
+            document.getElementById('board').appendChild(div);
+
+            div.addEventListener('mousedown', handleStart);
+            div.addEventListener('touchstart', handleStart, {passive: false});
+        }
+    </script>
+
+    <script>
+        const viewport = document.getElementById('viewport');
+        const board = document.getElementById('board');
+        const modal = document.getElementById('photoModal');
+        const modalImg = document.getElementById('modalImg');
+        const closeBtn = document.getElementsByClassName('close')[0];
+
+        let state = { scale: 1.0, panX: 0, panY: 0, isDraggingItem: false, isPanningBoard: false };
+        let startCoords = {x:0, y:0}, startPan = {x:0, y:0}, activeItem = null, lastMoveCoords = {x:0, y:0};
+
+        function updateTransform() {
+            board.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.scale})`;
+            const newSize = 20 * state.scale;
+            document.body.style.backgroundSize = `${newSize}px ${newSize}px`;
+            document.body.style.backgroundPosition = `${state.panX}px ${state.panY}px`;
+        }
+        updateTransform();
+
+        function changeZoom(delta) {
+            state.scale = Math.min(Math.max(state.scale + delta, 0.2), 3.0);
+            updateTransform();
+        }
+        function resetView() { state.scale = 1.0; state.panX = 0; state.panY = 0; updateTransform(); }
+
+        function getCoords(e) {
+            if (e.touches && e.touches.length) return {x:e.touches[0].clientX, y:e.touches[0].clientY};
+            if (e.changedTouches) return {x:e.changedTouches[0].clientX, y:e.changedTouches[0].clientY};
+            return {x:e.clientX, y:e.clientY};
+        }
+
+        window.handleStart = function(e) {
+            if (e.target.closest('.controls') || e.target.closest('.modal') || e.target.closest('.pin')) return;
+            if(e.type === 'touchstart') e.preventDefault();
+            const coords = getCoords(e);
+            startCoords = coords;
+            lastMoveCoords = coords;
+
+            const clickedPolaroid = e.target.closest('.polaroid');
+            if (clickedPolaroid) {
+                state.isDraggingItem = true;
+                activeItem = clickedPolaroid;
+                activeItem.classList.add('dragging');
+            } else {
+                state.isPanningBoard = true;
+                startPan = { x: state.panX, y: state.panY };
+                viewport.style.cursor = 'grabbing';
+            }
+        }
+
+        function handleGlobalMove(e) {
+            if (!state.isDraggingItem && !state.isPanningBoard) return;
+            e.preventDefault();
+            const coords = getCoords(e);
+
+            if (state.isPanningBoard) {
+                state.panX = startPan.x + (coords.x - startCoords.x);
+                state.panY = startPan.y + (coords.y - startCoords.y);
+                updateTransform();
+            } else if (state.isDraggingItem && activeItem) {
+                const stepX = coords.x - lastMoveCoords.x;
+                const stepY = coords.y - lastMoveCoords.y;
+                const style = window.getComputedStyle(activeItem);
+                activeItem.style.left = (parseFloat(style.left||0) + stepX/state.scale) + 'px';
+                activeItem.style.top = (parseFloat(style.top||0) + stepY/state.scale) + 'px';
+            }
+            lastMoveCoords = coords;
+        }
+
+        function handleEnd(e) {
+            if (state.isDraggingItem && activeItem) {
+                const coords = getCoords(e);
+                if (Math.abs(coords.x - startCoords.x) < 10 && Math.abs(coords.y - startCoords.y) < 10) {
+                    modal.style.display = "flex";
+                    modalImg.src = activeItem.querySelector('img').src;
+                }
+                activeItem.classList.remove('dragging');
+                activeItem = null;
+            }
+            state.isDraggingItem = false;
+            state.isPanningBoard = false;
+            viewport.style.cursor = 'grab';
+        }
+
+        viewport.addEventListener('mousedown', handleStart);
+        viewport.addEventListener('touchstart', handleStart, {passive: false});
+        document.addEventListener('mousemove', handleGlobalMove);
+        document.addEventListener('touchmove', handleGlobalMove, {passive: false});
+        document.addEventListener('mouseup', handleEnd);
+        document.addEventListener('touchend', handleEnd);
+
+        closeBtn.onclick = () => modal.style.display = "none";
+        modal.addEventListener('touchstart', (e) => { if(e.target==modal) modal.style.display="none"; });
+    </script>
+</body>
+</html>

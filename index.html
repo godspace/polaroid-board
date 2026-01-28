@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Polaroid Board v10 (Delete)</title>
+    <title>Polaroid Board v11 (Sync)</title>
     <style>
         /* --- СТИЛИ --- */
         body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: sans-serif; user-select: none; -webkit-user-select: none; touch-action: none; background-color: #aa7e56; background-image: radial-gradient(transparent 90%, rgba(0,0,0,0.1) 90%), radial-gradient(transparent 90%, rgba(0,0,0,0.1) 90%); background-size: 20px 20px; background-position: 0 0, 10px 10px; transition: background-size 0.3s ease-out; }
@@ -11,10 +11,12 @@
         .viewport:active { cursor: grabbing; }
         .board { width: 100%; height: 100%; position: absolute; top: 0; left: 0; transform-origin: 0 0; pointer-events: none; }
         
+        /* Добавили transition для left и top, чтобы фото плавно ползло к новому месту, если его подвинул друг */
         .polaroid { 
             position: absolute; background-color: white; padding: 10px 10px 35px 10px; 
             box-shadow: 5px 10px 20px rgba(0,0,0,0.3); width: 200px; 
-            transition: box-shadow 0.3s; cursor: grab; 
+            transition: box-shadow 0.3s, left 0.3s ease-out, top 0.3s ease-out; /* Плавное перемещение */
+            cursor: grab; 
             transform-origin: top center; 
             animation: sway 4s ease-in-out infinite alternate; 
             pointer-events: auto; 
@@ -26,42 +28,36 @@
             cursor: grabbing; animation: none; 
             transform: scale(1.1) rotate(0deg) !important; 
             box-shadow: 20px 40px 50px rgba(0,0,0,0.5); z-index: 9999 !important; 
+            transition: none; /* Убираем плавность при перетаскивании, чтобы не "мылило" */
         }
         
-        /* Класс для анимации падения */
         .polaroid.falling {
             animation: drop 1s ease-in forwards !important;
-            pointer-events: none; /* Чтобы нельзя было поймать падающее фото */
-            z-index: 100;
+            pointer-events: none; z-index: 100;
         }
 
         .polaroid:hover { z-index: 10; }
         .polaroid img { width: 100%; height: auto; display: block; pointer-events: none; filter: sepia(20%); }
 
-        /* --- НОВАЯ БУЛАВКА (КНОПКА) --- */
         .pin {
             position: absolute; top: -10px; left: 50%; transform: translateX(-50%);
             width: 15px; height: 15px; border-radius: 50%;
             background: radial-gradient(circle at 30% 30%, #ff4d4d, #990000);
             box-shadow: 2px 2px 5px rgba(0,0,0,0.5); z-index: 20;
-            cursor: pointer; /* Курсор пальца при наведении на кнопку */
+            cursor: pointer;
         }
-        /* Увеличение булавки при наведении, чтобы показать что она активна */
         .pin:hover { transform: translateX(-50%) scale(1.2); }
         
-        /* Металлическая иголка */
         .polaroid::before { 
             content: ''; position: absolute; top: -5px; left: 50%; transform: translateX(-50%); 
             width: 4px; height: 8px; background: #aaa; z-index: 1; 
         }
 
         @keyframes sway { 0% { transform: rotate(-2deg); } 100% { transform: rotate(2deg); } }
-        
-        /* Анимация падения */
         @keyframes drop {
             0% { transform: rotate(0deg); opacity: 1; }
-            20% { transform: rotate(10deg); top: +=20px; } /* Сначала чуть наклоняется */
-            100% { top: 1000px; transform: rotate(45deg); opacity: 0; } /* Улетает вниз */
+            20% { transform: rotate(10deg); top: +=20px; }
+            100% { top: 1000px; transform: rotate(45deg); opacity: 0; }
         }
 
         .controls { position: fixed; bottom: 20px; right: 20px; display: flex; flex-wrap: wrap-reverse; justify-content: flex-end; gap: 10px; z-index: 10000; }
@@ -72,7 +68,6 @@
         .modal-content { background: white; padding: 10px 10px 40px 10px; max-width: 90%; max-height: 80%; box-shadow: 0 0 50px rgba(0,0,0,0.5); border-radius: 2px; transform: rotate(-1deg); }
         .modal-content img { max-width: 100%; max-height: 70vh; display: block; }
         .close { position: absolute; top: 5px; right: 15px; color: #333; font-size: 30px; font-weight: bold; cursor: pointer; line-height: 1; }
-        
         #loader { display: none; margin-left: 10px; color: white; font-weight: bold; text-shadow: 1px 1px 2px black; align-self: center;}
     </style>
 </head>
@@ -83,7 +78,7 @@
     </div>
 
     <div class="controls">
-        <div id="loader">Сжимаю и отправляю...</div>
+        <div id="loader">Processing...</div>
         <button class="btn" id="uploadBtn" onclick="document.getElementById('fileInput').click()">📷 Photo</button>
         <button class="btn" onclick="changeZoom(0.1)">➕</button>
         <button class="btn" onclick="changeZoom(-0.1)">➖</button>
@@ -101,10 +96,9 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        // Добавили remove и removeRef
-        import { getDatabase, ref, push, set, remove, onChildAdded, onChildRemoved } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+        // Добавили update и onChildChanged
+        import { getDatabase, ref, push, set, remove, update, onChildAdded, onChildRemoved, onChildChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
-        // ТВОИ КЛЮЧИ
         const firebaseConfig = {
             apiKey: "AIzaSyBmwGj7Rbfh6svO0RzNXObBFVG6yHFc8VI",
             authDomain: "polaroid-board-6aa2a.firebaseapp.com",
@@ -120,7 +114,16 @@
         const db = getDatabase(app);
         const dbRef = ref(db, 'photos_base64');
 
-        // СЖАТИЕ ФОТО
+        // --- ГЛОБАЛЬНАЯ ФУНКЦИЯ ДЛЯ ОБНОВЛЕНИЯ ПОЗИЦИИ ---
+        // Мы делаем её глобальной (window), чтобы скрипт ниже мог её вызвать
+        window.updatePhotoPosition = function(key, newX, newY) {
+            update(ref(db, 'photos_base64/' + key), {
+                x: newX,
+                y: newY
+            });
+        };
+
+        // СЖАТИЕ
         function compressImage(file) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -168,7 +171,7 @@
                 });
             } catch (error) {
                 console.error(error);
-                alert("Ошибка: " + error.message);
+                alert("Error: " + error.message);
             } finally {
                 uploadBtn.disabled = false;
                 loader.style.display = 'none';
@@ -176,67 +179,65 @@
             }
         });
 
-        // --- ЛОГИКА ДОБАВЛЕНИЯ И УДАЛЕНИЯ ---
+        // --- EVENTS FIREBASE ---
 
-        // 1. Пришло новое фото
+        // 1. Добавление
         onChildAdded(dbRef, (snapshot) => {
             const data = snapshot.val();
-            const key = snapshot.key; // Уникальный ID фото в базе
+            const key = snapshot.key;
             if(data && data.image_data) {
                 renderPhoto(data.image_data, data.x, data.y, key);
             }
         });
 
-        // 2. Кто-то удалил фото (слушаем удаление)
+        // 2. Удаление
         onChildRemoved(dbRef, (snapshot) => {
             const key = snapshot.key;
             const elementToRemove = document.getElementById(key);
-            
             if (elementToRemove) {
-                // Запускаем анимацию падения
                 elementToRemove.classList.add('falling');
-                
-                // Ждем 1 секунду (пока упадет) и удаляем из HTML навсегда
-                setTimeout(() => {
-                    elementToRemove.remove();
-                }, 1000);
+                setTimeout(() => { elementToRemove.remove(); }, 1000);
             }
         });
+
+        // 3. Изменение координат (СИНХРОНИЗАЦИЯ)
+        onChildChanged(dbRef, (snapshot) => {
+            const data = snapshot.val();
+            const key = snapshot.key;
+            const element = document.getElementById(key);
+            
+            // Если элемент существует и он СЕЙЧАС НЕ перетаскивается нами
+            // (чтобы не было конфликта, когда я тащу, а сервер пытается вернуть назад)
+            if (element && !element.classList.contains('dragging')) {
+                element.style.left = data.x + 'px';
+                element.style.top = data.y + 'px';
+            }
+        });
+
 
         function renderPhoto(src, x, y, key) {
             const div = document.createElement('div');
             div.className = 'polaroid';
-            div.id = key; // Присваиваем ID элемента равный ключу базы, чтобы потом найти его
+            div.id = key; 
             div.style.left = x + 'px';
             div.style.top = y + 'px';
             div.style.animationDelay = `-${Math.random() * 2}s`; 
 
-            // Красная кнопка (Булавка)
             const pin = document.createElement('div');
             pin.className = 'pin';
-            // Обработчик удаления
             pin.addEventListener('mousedown', (e) => {
-                e.stopPropagation(); // Чтобы не началось перетаскивание
-                const confirmDelete = confirm("Удалить фото?");
-                if (confirmDelete) {
-                    // Удаляем из Firebase. Это вызовет onChildRemoved у всех пользователей
-                    remove(ref(db, 'photos_base64/' + key));
-                }
+                e.stopPropagation(); 
+                if (confirm("Delete photo?")) remove(ref(db, 'photos_base64/' + key));
             });
-            // Для сенсоров
             pin.addEventListener('touchstart', (e) => {
-                e.stopPropagation();
-                e.preventDefault(); // Чтобы не кликнуло дважды
-                const confirmDelete = confirm("Удалить фото?");
-                if (confirmDelete) {
-                    remove(ref(db, 'photos_base64/' + key));
-                }
+                e.stopPropagation(); e.preventDefault();
+                if (confirm("Delete photo?")) remove(ref(db, 'photos_base64/' + key));
             });
 
             const img = document.createElement('img');
             img.src = src;
             
-            div.appendChild(pin); // Добавляем булавку
+            div.appendChild(pin);
             div.appendChild(img);
             document.getElementById('board').appendChild(div);
 
@@ -316,10 +317,23 @@
         function handleEnd(e) {
             if (state.isDraggingItem && activeItem) {
                 const coords = getCoords(e);
+                
+                // Проверка на клик (если почти не сдвинули)
                 if (Math.abs(coords.x - startCoords.x) < 10 && Math.abs(coords.y - startCoords.y) < 10) {
                     modal.style.display = "flex";
                     modalImg.src = activeItem.querySelector('img').src;
+                } else {
+                    // ЕСЛИ СДВИНУЛИ СИЛЬНО (значит было перемещение)
+                    // Отправляем новые координаты в базу данных!
+                    if (window.updatePhotoPosition) {
+                         const style = window.getComputedStyle(activeItem);
+                         const finalX = parseFloat(style.left || 0);
+                         const finalY = parseFloat(style.top || 0);
+                         // Вызываем функцию обновления Firebase
+                         window.updatePhotoPosition(activeItem.id, finalX, finalY);
+                    }
                 }
+
                 activeItem.classList.remove('dragging');
                 activeItem = null;
             }
@@ -339,5 +353,4 @@
         modal.addEventListener('touchstart', (e) => { if(e.target==modal) modal.style.display="none"; });
     </script>
 </body>
-
 </html>
